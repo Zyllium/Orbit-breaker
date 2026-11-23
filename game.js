@@ -1,9 +1,9 @@
 'use strict';
 
 const ui = Object.fromEntries(
-  ['field', 'score', 'best', 'wave', 'lives', 'overlay', 'mode', 'title',
+  ['field', 'score', 'best', 'level', 'lives', 'overlay', 'mode', 'title',
     'description', 'play', 'sound', 'pause', 'credits', 'upgrades', 'power', 'rate',
-    'open-shop', 'shop', 'shop-coins', 'cannon-list', 'combat-tools', 'bonus', 'power-status'].map(id => [id, document.getElementById(id)])
+    'open-shop', 'shop', 'shop-coins', 'cannon-list', 'combat-tools', 'bonus', 'power-status', 'level-picker', 'level-select', 'level-goal'].map(id => [id, document.getElementById(id)])
 );
 const ctx = ui.field.getContext('2d');
 const height = 560;
@@ -40,7 +40,16 @@ const powerUps = {
   freeze: { name: 'Freeze', icon: '❄', color: '#9fe7ff', duration: 4 },
   double: { name: 'Double Shot', icon: '×2', color: '#ffb4e5', duration: 8 }
 };
+const powerUpKinds = Object.keys(powerUps);
 const maxBallHealth = 5000;
+const rockRadii = [15, 27, 43];
+const finalLevel = 31;
+const levelProgressKey = 'orbit-breaker-cleared-level';
+const ballCountByLevel = [
+  1, 2, 2, 3, 2, 3, 3, 4, 3, 4,
+  3, 4, 4, 3, 4, 4, 3, 4, 4, 3,
+  4, 4, 3, 4, 4, 3, 4, 4, 3, 4, 1
+];
 const ballHealthBySize = [.25, .5, 1];
 const shotPowerPerUpgrade = 4;
 const palettes = [
@@ -90,16 +99,21 @@ let rocks = [];
 let shots = [];
 let sparks = [];
 let drops = [];
-let incoming = 0;
+let incoming = [];
 let arrivalTimer = 0;
 let score = 0;
-let wave = 1;
+let clearedLevel = 0;
+try {
+  const saved = Number(localStorage.getItem(levelProgressKey));
+  if (Number.isInteger(saved)) clearedLevel = clamp(saved, 0, finalLevel);
+} catch {}
+let level = Math.min(clearedLevel + 1, finalLevel);
+let levelScoreStart = 0;
 let lives = 3;
 let cooldown = 0;
-let nextWave = 0;
+let clearTime = 0;
 let invulnerable = 0;
-let waveBanner = 0;
-let waveHasPowerDrop = false;
+let levelBanner = 0;
 let bonusEarned = 0;
 let bonusStock = 0;
 let bonusTime = 0;
@@ -117,6 +131,12 @@ function updateCombatTools() {
     .map(([key, effect]) => effect.name + ' ' + Math.ceil(powerTime[key]) + 's');
   const status = effects.join(' · ');
   if (ui['power-status'].textContent !== status) ui['power-status'].textContent = status;
+
+  const remaining = incoming.length * 7 + rocks.reduce((total, rock) => total + [1, 3, 7][rock.tier], 0);
+  const goal = remaining === 0
+    ? 'Collect remaining coins'
+    : remaining + (remaining === 1 ? ' target left' : ' targets left');
+  if (ui['level-goal'].textContent !== goal) ui['level-goal'].textContent = goal;
 }
 
 function activateBonus() {
@@ -137,7 +157,7 @@ ui.bonus.addEventListener('click', activateBonus);
 function updateHud() {
   ui.score.textContent = format(score, 4);
   ui.best.textContent = format(best, 4);
-  ui.wave.textContent = format(wave, 2);
+  ui.level.textContent = format(level, 2);
   ui.lives.textContent = '♥'.repeat(lives) + '♡'.repeat(3 - lives);
   ui.lives.setAttribute('aria-label', lives + (lives === 1 ? ' life' : ' lives'));
 }
@@ -146,8 +166,12 @@ function upgradeCost(level) {
   return 4 + level * 5;
 }
 
+function canChangeLoadout() {
+  return ['ready', 'over', 'cleared', 'won'].includes(scene);
+}
+
 function chooseCannon(id) {
-  if (scene !== 'ready' && scene !== 'over') return;
+  if (!canChangeLoadout()) return;
   if (upgrades.equipped === id) return;
   if (!upgrades.owned.includes(id)) {
     const { cost } = cannons[id];
@@ -212,7 +236,7 @@ function saveUpgrades() {
 
 for (const key of ['power', 'rate']) {
   ui[key].addEventListener('click', () => {
-    if (scene !== 'ready' && scene !== 'over') return;
+    if (!canChangeLoadout()) return;
     const cost = upgradeCost(upgrades[key]);
     if (upgrades[key] >= upgradeLimit || upgrades.credits < cost) return;
     upgrades.credits -= cost;
@@ -269,28 +293,65 @@ ui.sound.addEventListener('click', async () => {
   tone(400, 620, .11, .05);
 });
 
+function updatePlayButton() {
+  const selected = Number(ui['level-select'].value);
+  if (scene === 'cleared' && selected === level + 1) {
+    ui.play.textContent = 'Next level';
+    return;
+  }
+  const action = selected === level && scene === 'over' ? 'Retry' : 'Play';
+  ui.play.textContent = action + ' level ' + selected;
+}
+
+function showLevelPicker(selected) {
+  const unlocked = Math.min(clearedLevel + 1, finalLevel);
+  const options = [];
+  for (let number = 1; number <= unlocked; number++) {
+    const option = document.createElement('option');
+    option.value = number;
+    option.textContent = 'Level ' + number + (number <= clearedLevel ? ' · Cleared' : '');
+    options.push(option);
+  }
+  ui['level-select'].replaceChildren(...options);
+  ui['level-select'].value = selected;
+  updatePlayButton();
+}
+
 function setScene(value) {
   scene = value;
   pressed.clear();
   pointerX = null;
   dragPointer = null;
-  ui.overlay.hidden = value === 'playing';
-  ui['combat-tools'].hidden = value !== 'playing' && value !== 'paused';
-  updateCombatTools();
+  const playing = value === 'playing';
+  const paused = value === 'paused';
+  const canChoose = canChangeLoadout();
+  ui.overlay.hidden = playing;
   ui.overlay.dataset.screen = value;
-  ui.upgrades.hidden = value !== 'ready' && value !== 'over';
-  ui.pause.disabled = value === 'ready' || value === 'over';
-  ui.pause.textContent = value === 'paused' ? 'Resume' : 'Pause';
-  if (value === 'paused' || value === 'over') {
-    const paused = value === 'paused';
-    ui.mode.textContent = paused ? 'RUN PAUSED' : 'RUN COMPLETE';
-    ui.title.textContent = paused ? 'Paused' : 'Game over';
-    ui.description.textContent = paused
-      ? 'Your run is on hold.'
-      : 'Score ' + score.toLocaleString() + ' · Wave ' + wave + ' · Best ' + best.toLocaleString();
-    ui.play.textContent = paused ? 'Resume game' : 'Play again';
-    if (!document.hidden) ui.play.focus({ preventScroll: true });
+  ui['combat-tools'].hidden = !playing && !paused;
+  ui['level-picker'].hidden = !canChoose;
+  ui.upgrades.hidden = !canChoose;
+  ui.pause.disabled = !playing && !paused;
+  ui.pause.textContent = paused ? 'Resume' : 'Pause';
+  updateCombatTools();
+  if (playing || value === 'ready') return;
+
+  ui.mode.textContent = 'LEVEL ' + format(level, 2) + ' / ' + finalLevel;
+  if (paused) {
+    ui.title.textContent = 'Paused';
+    ui.description.textContent = 'Your level is on hold.';
+    ui.play.textContent = 'Resume level';
+  } else if (value === 'over') {
+    ui.title.textContent = 'Try again';
+    ui.description.textContent = 'Score ' + score.toLocaleString() + ' · Best ' + best.toLocaleString();
+    showLevelPicker(level);
+  } else {
+    ui.title.textContent = value === 'won' ? 'Game cleared' : 'Level cleared';
+    const points = score - levelScoreStart;
+    const reward = bonusStock > 0 ? ' · ' + bonusStock + ' bonus cannon charges ready' : '';
+    ui.description.textContent = '+' + points.toLocaleString() + ' points' + reward;
+    showLevelPicker(Math.min(level + 1, finalLevel));
   }
+  if (!document.hidden) ui.play.focus({ preventScroll: true });
 }
 
 function togglePause() {
@@ -299,7 +360,7 @@ function togglePause() {
 }
 
 function ballHealth(tier) {
-  const stagesCleared = wave - 1;
+  const stagesCleared = level - 1;
   const largeBallHealth = 120 + 45 * stagesCleared + 4 * stagesCleared ** 2;
   return Math.min(maxBallHealth, Math.round(largeBallHealth * ballHealthBySize[tier]));
 }
@@ -309,59 +370,123 @@ function ballHealthLabel(hp) {
   return Math.floor(hp / 100) / 10 + 'k';
 }
 
-function makeRock(x, y, tier, vx, vy, palette) {
+function makeLevelBalls(count) {
+  const health = ballHealthBySize.map((_, tier) => {
+    const baseline = ballHealth(tier);
+    const spread = Math.min(Math.floor(baseline * .18), maxBallHealth - baseline);
+    const values = Array(count * 2 ** (2 - tier)).fill(baseline);
+    // Balance each random health gain with an equal loss on another ball.
+    for (let i = 0; i + 1 < values.length; i += 2) {
+      const shift = Math.floor(random(-spread, spread + 1));
+      values[i] += shift;
+      values[i + 1] -= shift;
+    }
+    if (values.length % 2 === 1 && Math.random() < .5) values.reverse();
+    return values;
+  });
+
+  if (count === 1) {
+    // A lone large ball shares its health budget with one of its fragments.
+    const large = health[2][0];
+    const fragment = Math.floor(random(0, health[1].length));
+    const spread = Math.floor(ballHealth(1) * .12);
+    const shift = Math.floor(random(-spread, Math.min(spread, maxBallHealth - large) + 1));
+    health[2][0] += shift;
+    health[1][fragment] -= shift;
+  }
+
+  const carriers = [];
+  function makePlan(tier) {
+    const plan = { tier, hp: health[tier].pop(), fragments: [], powerUp: null };
+    if (tier > 0) {
+      carriers.push(plan);
+      plan.fragments = [makePlan(tier - 1), makePlan(tier - 1)];
+    }
+    return plan;
+  }
+  const firstSide = Math.random() < .5 ? -1 : 1;
+  const balls = Array.from({ length: count }, (_, index) => Object.assign(makePlan(2), {
+    side: index % 2 === 0 ? firstSide : -firstSide,
+    inset: random(.02, .33),
+    startY: random(76, 150),
+    startVY: random(35, 110)
+  }));
+  // Keep one drop per level, with both its type and carrier randomized.
+  const carrier = carriers[Math.floor(random(0, carriers.length))];
+  carrier.powerUp = powerUpKinds[Math.floor(random(0, powerUpKinds.length))];
+  return balls.reverse();
+}
+
+function makeRock(x, y, vx, vy, palette, plan) {
   return {
-    x, y, vx, vy, palette, tier,
-    radius: [15, 27, 43][tier],
-    hp: ballHealth(tier),
+    x, y, vx, vy, palette,
+    tier: plan.tier, radius: rockRadii[plan.tier], hp: plan.hp,
+    fragments: plan.fragments, powerUp: plan.powerUp,
     spin: random(-1.6, 1.6), angle: random(0, Math.PI * 2), flash: 0
   };
 }
 
 function launchRock() {
-  const entersFromLeft = incoming % 2 === wave % 2;
-  const radius = 43;
-  const speed = Math.min(270, 112 + 13 * wave);
-  const rock = makeRock(entersFromLeft ? radius : width - radius,
-    random(76, 150), 2, entersFromLeft ? speed : -speed, random(35, 110),
-    palettes[(wave + incoming - 1) % palettes.length]);
-  rocks.push(rock);
-  incoming--;
-  arrivalTimer = Math.max(.46, .9 - wave * .025);
+  const plan = incoming.pop();
+  const radius = rockRadii[plan.tier];
+  const leftX = radius + (width - 2 * radius) * plan.inset;
+  const x = plan.side < 0 ? leftX : width - leftX;
+  const speed = Math.min(270, 112 + 13 * level);
+  const palette = palettes[(level + incoming.length) % palettes.length];
+  rocks.push(makeRock(x, plan.startY, -plan.side * speed, plan.startVY, palette, plan));
+  arrivalTimer = Math.max(.46, .9 - level * .025);
 }
 
-function spawnWave() {
-  waveHasPowerDrop = false;
-  incoming = Math.min(7, 1 + Math.floor(wave / 2));
-  waveBanner = .9;
-  nextWave = 0;
-  launchRock();
-  updateHud();
-}
-
-function startGame() {
-  ship = { x: width / 2 };
-  score = 0;
-  wave = 1;
+function startLevel(selectedLevel, continuing = false) {
+  if (!continuing) {
+    score = 0;
+    bonusEarned = 0;
+    bonusStock = 0;
+  }
+  level = selectedLevel;
+  levelScoreStart = score;
   lives = 3;
+  ship = { x: width / 2 };
   invulnerable = 0;
   cooldown = 0;
   rocks = [];
   shots = [];
   sparks = [];
   drops = [];
-  bonusEarned = 0;
-  bonusStock = 0;
   bonusTime = 0;
   powerTime.freeze = 0;
   powerTime.double = 0;
-  spawnWave();
+  incoming = makeLevelBalls(ballCountByLevel[level - 1]);
+  levelBanner = .9;
+  clearTime = 0;
+  launchRock();
+  updateHud();
   setScene('playing');
 }
 
+function completeLevel() {
+  if (level > clearedLevel) {
+    clearedLevel = level;
+    try { localStorage.setItem(levelProgressKey, String(clearedLevel)); } catch {}
+  }
+  if (bonusEarned < bonusLimit) {
+    bonusEarned++;
+    bonusStock++;
+  }
+  tone(350, 820, .24, .065);
+  setScene(level === finalLevel ? 'won' : 'cleared');
+}
+
+ui['level-select'].addEventListener('change', updatePlayButton);
 ui.play.addEventListener('click', () => {
-  if (scene === 'paused') togglePause();
-  else startGame();
+  if (scene === 'paused') {
+    togglePause();
+    return;
+  }
+  if (!canChangeLoadout()) return;
+  const selected = Number(ui['level-select'].value);
+  if (!Number.isInteger(selected) || selected < 1 || selected > Math.min(clearedLevel + 1, finalLevel)) return;
+  startLevel(selected, scene === 'cleared' && selected === level + 1);
 });
 ui.pause.addEventListener('click', togglePause);
 
@@ -429,11 +554,9 @@ function hitRock(rock, index, shot) {
   burst(rock.x, rock.y, rock.palette[0], 18);
   score += [30, 60, 100][rock.tier];
   drops.push({ x: rock.x, y: rock.y, vy: -115, timeOnFloor: 0, amount: rock.tier + 1 });
-  if (rock.tier === 2 && !waveHasPowerDrop) {
-    waveHasPowerDrop = true;
-    const kind = wave % 2 === 0 ? 'double' : 'freeze';
+  if (rock.powerUp) {
     const x = clamp(rock.x + (rock.x < width / 2 ? 28 : -28), 13, width - 13);
-    drops.push({ x, y: rock.y, vy: -200, timeOnFloor: 0, kind });
+    drops.push({ x, y: rock.y, vy: -200, timeOnFloor: 0, kind: rock.powerUp });
   }
   if (score > best) {
     best = score;
@@ -441,13 +564,13 @@ function hitRock(rock, index, shot) {
   }
   updateHud();
   tone(170, 63, .22, .08);
-  if (rock.tier === 0) return;
-  for (const direction of [-1, 1]) {
-    const radius = [15, 27][rock.tier - 1];
+  for (const [fragmentIndex, fragment] of rock.fragments.entries()) {
+    const direction = fragmentIndex === 0 ? -1 : 1;
+    const radius = rockRadii[fragment.tier];
     const x = clamp(rock.x + direction * radius * .85, radius, width - radius);
-    rocks.push(makeRock(x, rock.y, rock.tier - 1,
-      direction * Math.min(320, Math.abs(rock.vx) + 54),
-      -Math.sqrt(2 * gravity * Math.min(132, Math.max(24, rock.y - radius - 12))), rock.palette));
+    rocks.push(makeRock(x, rock.y, direction * Math.min(320, Math.abs(rock.vx) + 54),
+      -Math.sqrt(2 * gravity * Math.min(132, Math.max(24, rock.y - radius - 12))),
+      rock.palette, fragment));
   }
 }
 
@@ -504,10 +627,10 @@ function update(dt) {
     cooldown = cannon.interval * (1 - upgrades.rate * .13);
   }
   invulnerable -= dt;
-  waveBanner -= dt;
+  levelBanner -= dt;
   if (!frozen) {
     arrivalTimer -= dt;
-    if (incoming > 0 && arrivalTimer <= 0) launchRock();
+    if (incoming.length > 0 && arrivalTimer <= 0) launchRock();
   }
 
   for (const rock of rocks) {
@@ -558,16 +681,12 @@ function update(dt) {
   }
   sparks = sparks.filter(spark => spark.duration > 0);
   updateDrops(dt);
-  if (rocks.length === 0 && incoming === 0) {
-    nextWave += dt;
-    if (nextWave > .64) {
-      if (bonusEarned < bonusLimit) {
-        bonusEarned++;
-        bonusStock++;
-        tone(350, 820, .24, .065);
-      }
-      wave++;
-      spawnWave();
+  if (scene === 'playing' && rocks.length === 0 && incoming.length === 0) {
+    clearTime += dt;
+    // Allow the last coins to land and be collected before opening the results screen.
+    if (clearTime >= 2.6 || (clearTime >= .5 && !drops.some(drop => !drop.kind))) {
+      completeLevel();
+      return;
     }
   }
   updateCombatTools();
@@ -743,14 +862,14 @@ function draw() {
     cannon(ship.x, shipY);
   }
 
-  if (waveBanner > 0 || nextWave > .1) {
+  if (levelBanner > 0 || clearTime > 0) {
     ctx.font = 'bold 21px monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = accent;
     ctx.strokeStyle = '#1a1927';
     ctx.lineWidth = 5;
-    const message = nextWave > .1 ? 'WAVE CLEARED' : 'WAVE ' + format(wave, 2);
+    const message = clearTime > 0 ? 'LEVEL CLEARED' : 'LEVEL ' + format(level, 2);
     ctx.strokeText(message, width / 2, 32);
     ctx.fillText(message, width / 2, 32);
   }
@@ -770,6 +889,7 @@ function frame(time) {
 
 new ResizeObserver(fitCanvas).observe(ui.field);
 fitCanvas();
+showLevelPicker(level);
 updateHud();
 updateUpgrades();
 requestAnimationFrame(frame);
