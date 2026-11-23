@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#101016">
+<meta name="description" content="An arcade game about breaking bouncing planetoids with a sliding laser cannon.">
+<title>Orbit Breaker</title>
+<style>
+:root{color-scheme:dark;--bg:#101016;--panel:#191923;--line:#323141;--muted:#aaa8bc;--white:#f6f5ff;--acid:#dcfc68;--mono:ui-monospace,SFMono-Regular,Consolas,monospace;font-family:system-ui,sans-serif}
+*{box-sizing:border-box}
+body{margin:0;min-width:280px;background:radial-gradient(ellipse at 50% 0,#201c2c,var(--bg) 64%);color:var(--white)}
+button{font:inherit;cursor:pointer}
+button:focus-visible{outline:2px solid var(--acid);outline-offset:4px}
+button:disabled{opacity:.45;cursor:default}
+.shell{width:min(1120px,calc(100% - 56px));margin:auto;padding:25px 0 22px}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:23px}
+.brand{display:flex;align-items:center;gap:12px;font-weight:900;font-size:17px;letter-spacing:.05em}
+.mark{width:37px;height:37px;display:grid;place-items:center;color:var(--acid);border:1px solid #555b36;border-radius:10px;background:#272a20;font-size:25px}
+.actions{display:flex;gap:8px}
+.utility{padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--white);font:700 13px var(--mono)}
+.hud{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px;margin-bottom:10px}
+.stat{min-width:0;display:flex;align-items:center;justify-content:space-between;gap:6px;border:1px solid var(--line);border-radius:9px;background:var(--panel);padding:11px 15px}
+.label{font:600 12px var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.value{font:800 clamp(15px,2.4vw,23px)/1 var(--mono);font-variant-numeric:tabular-nums}
+#credits{color:#ffd574}
+#lives{color:#ff829e;letter-spacing:.08em;white-space:nowrap}
+.arena{position:relative;isolation:isolate;height:clamp(380px,66vh,680px);overflow:hidden;border:1px solid #414052;border-radius:14px;background:#151523;box-shadow:0 20px 70px #08080e88}
+canvas{width:100%;height:100%;display:block;touch-action:none}
+.overlay{position:absolute;inset:0;display:flex;align-items:center;padding:clamp(24px,6vw,77px);background:linear-gradient(90deg,#171525f5 0%,#171525c7 36%,#17152500 76%);pointer-events:none}
+.overlay[hidden]{display:none}
+.overlay[data-screen="paused"],.overlay[data-screen="over"]{justify-content:center;text-align:center;background:#11101be6}
+.card{max-width:490px}
+.mode{font:700 13px var(--mono);letter-spacing:.18em;color:var(--acid);margin:0 0 18px}
+h1{font-family:Impact,'Arial Black',system-ui,sans-serif;font-weight:950;text-transform:uppercase;font-size:clamp(54px,8vw,108px);line-height:.86;letter-spacing:-.055em;margin:0}
+h1 span{display:block;color:var(--acid)}
+.description{margin:20px 0 24px;font-size:clamp(16px,1.8vw,19px);line-height:1.5;color:#d8d5e6;max-width:325px}
+[data-screen="paused"] .description,[data-screen="over"] .description{margin-inline:auto}
+.play{pointer-events:auto;min-height:48px;padding:11px 24px;background:var(--acid);border:1px solid var(--acid);color:#171b0d;border-radius:8px;font-weight:900;box-shadow:0 5px 0 #788c36}
+.play:hover{background:#ecffad}
+.play:active{transform:translateY(3px);box-shadow:0 2px 0 #788c36}
+.upgrades{pointer-events:auto;display:flex;flex-wrap:wrap;gap:6px;margin-top:17px}
+.upgrades[hidden]{display:none}
+.upgrades .utility{text-align:left;padding:8px 9px}
+[data-screen="over"] .upgrades{justify-content:center}
+#open-shop{color:var(--acid)}
+.shop{width:min(440px,calc(100% - 24px));max-height:calc(100dvh - 24px);padding:20px;border:1px solid #504e64;border-radius:14px;background:var(--panel);color:var(--white)}
+.shop::backdrop{background:#080811bf}
+.shop-header{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.shop h2{margin:0;font-size:24px}
+.shop-coins{margin:8px 0 14px;color:#ffd574;font:700 14px var(--mono)}
+.cannon-list{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.cannon-option{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:10px}
+.cannon-option p{margin:3px 0 0;font-size:13px;color:var(--muted)}
+.cannon-option .utility{min-height:40px}
+@media(max-width:360px){.cannon-option{grid-template-columns:1fr}.cannon-option .utility{justify-self:start}}
+.combat-tools[hidden]{display:none}
+.combat-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:12px}
+#bonus{border-color:#9a753d;color:#f9cf70;min-height:40px}
+#power-status{font:700 13px var(--mono);color:#d9c5fa}
+.controls{display:flex;flex-wrap:wrap;gap:13px 22px;align-items:center;justify-content:space-between;margin-top:15px;color:var(--muted);font-size:13px}
+.controls div{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+kbd{font:700 12px var(--mono);display:inline-block;padding:3px 6px;border:1px solid var(--line);border-radius:4px;background:var(--panel);color:var(--white)}
+@media(max-width:650px){
+.shell{width:calc(100% - 24px);padding-top:12px}
+.topbar{margin-bottom:12px}
+.brand{font-size:13px;gap:7px}
+.mark{width:29px;height:29px;font-size:19px;border-radius:7px}
+.utility{font-size:12px;padding:8px}
+.hud{gap:5px}
+.stat{padding:7px 6px;display:grid;gap:4px;justify-content:start}
+.label{font-size:10px}
+.arena{height:clamp(370px,calc(100dvh - 173px),680px)}
+.overlay{padding:21px;background:linear-gradient(90deg,#171525f4,#17152596 65%,#17152545)}
+.mode{margin-bottom:11px}
+h1{font-size:clamp(39px,11vw,65px)}
+.upgrades{max-width:260px}
+.description{max-width:230px;margin:14px 0 19px}
+.controls{margin-top:10px;font-size:12px;gap:7px}
+}
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="topbar">
+    <div class="brand"><span class="mark" aria-hidden="true">⟡</span> ORBIT BREAKER</div>
+    <div class="actions">
+      <button class="utility" id="sound" aria-pressed="false" type="button">Sound off</button>
+      <button class="utility" id="pause" type="button" disabled>Pause</button>
+    </div>
+  </header>
+  <div class="hud" aria-label="Game stats">
+    <div class="stat"><span class="label">Score</span><strong class="value" id="score">0000</strong></div>
+    <div class="stat"><span class="label">Best</span><strong class="value" id="best">0000</strong></div>
+    <div class="stat"><span class="label">Wave</span><strong class="value" id="wave">01</strong></div>
+    <div class="stat"><span class="label">Coins</span><strong class="value" id="credits">0</strong></div>
+    <div class="stat"><span class="label">Hull</span><strong class="value" id="lives" aria-label="3 lives">♥♥♥</strong></div>
+  </div>
+  <section class="arena" aria-label="Orbit Breaker game arena">
+    <canvas id="field" aria-label="Arcade playfield"></canvas>
+    <div class="overlay" id="overlay" data-screen="ready">
+      <div class="card">
+        <p class="mode" id="mode">SURVIVAL ARCADE</p>
+        <h1 id="title">Orbit <span>Breaker</span></h1>
+        <p class="description" id="description">Break bouncing planetoids and collect coins, Freeze and Double Shot pickups.</p>
+        <button class="play" id="play" type="button">Start game</button>
+        <div class="upgrades" id="upgrades" aria-label="Cannon upgrades">
+          <button class="utility" id="power" type="button" disabled>Shot power 1 · 4 coins</button>
+          <button class="utility" id="open-shop" type="button" aria-haspopup="dialog">Cannons · Pulse</button>
+          <button class="utility" id="rate" type="button" disabled>Fire rate 1 · 4 coins</button>
+        </div>
+      </div>
+    </div>
+  </section>
+  <dialog class="shop" id="shop" aria-labelledby="shop-title">
+    <div class="shop-header">
+      <h2 id="shop-title">Cannons</h2>
+      <form method="dialog"><button class="utility" autofocus>Close</button></form>
+    </div>
+    <p class="shop-coins" id="shop-coins" aria-live="polite">0 coins</p>
+    <ul class="cannon-list" id="cannon-list"></ul>
+  </dialog>
+  <div class="combat-tools" id="combat-tools" hidden>
+    <button class="utility" id="bonus" type="button" aria-keyshortcuts="Space" disabled>50 DMG cannon · 0 ready</button>
+    <span id="power-status"></span>
+  </div>
+  <footer class="controls">
+    <div><kbd>←</kbd><kbd>→</kbd> or <kbd>A</kbd><kbd>D</kbd> to move · Mouse or touch to steer</div>
+    <div>Auto-fire · <kbd>Space</kbd> bonus cannon · <kbd>P</kbd> pause</div>
+  </footer>
+</main>
+<script src="game.js?v=5"></script>
+</body>
+</html>
